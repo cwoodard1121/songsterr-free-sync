@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Songsterr – Skip "Original Audio" Sync-Pause Popup
 // @namespace    https://github.com/songsterr-tweaks
-// @version      1.1.0
+// @version      1.2.0
 // @description  Auto-dismisses the "Upgrade to Plus for Original audio without sync pauses" popup on Songsterr by choosing the free "continue with sync pauses" option. No more nag.
 // @author       you
 // @match        https://www.songsterr.com/*
@@ -37,56 +37,71 @@
     return null;
   }
 
-  function dismiss() {
-    // 1) Preferred: locate the popup and click its free "continue with sync
-    //    pauses" link, which is exactly what Songsterr wants you to click.
-    const links = document.querySelectorAll('a, button');
-    for (const link of links) {
-      if (CONTINUE_TEXT.test(link.textContent || '')) {
-        // Neutralize navigation: the href points back at the current page,
-        // so just let the SPA handler close the modal without a full reload.
-        console.log(TAG, 'clicked "continue with sync pauses" – popup dismissed');
-        link.click();
-        cleanup();
-        return true;
-      }
-    }
+  // Elements we've already acted on. The observer fires on every DOM mutation
+  // (playback scrolling mutates constantly), so without this we'd re-click the
+  // button over and over and stall the score.
+  const handled = new WeakSet();
 
-    // 2) Fallback: no "continue" link found (layout changed) — find the nag
-    //    dialog by its text and remove it outright.
-    const candidates = document.querySelectorAll(
+  function findNag() {
+    const dialogs = document.querySelectorAll(
       'form[role="dialog"], [role="dialog"], dialog'
     );
-    for (const el of candidates) {
-      if (NAG_TEXT.test(el.textContent || '')) {
-        console.log(TAG, 'removed upgrade nag dialog (fallback path)');
-        const root = findDialogRoot(el) || el;
-        root.remove();
-        cleanup();
+    for (const el of dialogs) {
+      if (!handled.has(el) && NAG_TEXT.test(el.textContent || '')) return el;
+    }
+    return null;
+  }
+
+  function dismiss() {
+    const nag = findNag();
+    if (!nag) return false;
+    handled.add(nag);
+
+    // 1) Preferred: click the free "continue with sync pauses" link inside the
+    //    nag only (never a same-named control elsewhere on the page).
+    for (const link of nag.querySelectorAll('a, button')) {
+      if (CONTINUE_TEXT.test(link.textContent || '')) {
+        console.log(TAG, 'clicked "continue with sync pauses" – popup dismissed');
+        link.click();
+        // If the app didn't close it, remove it ourselves.
+        setTimeout(() => {
+          if (nag.isConnected) (findDialogRoot(nag) || nag).remove();
+          cleanup();
+        }, 300);
         return true;
       }
     }
 
-    return false;
+    // 2) Fallback: no "continue" link found (layout changed) — remove the dialog.
+    console.log(TAG, 'removed upgrade nag dialog (fallback path)');
+    (findDialogRoot(nag) || nag).remove();
+    cleanup();
+    return true;
   }
 
   function cleanup() {
     // Re-enable scrolling if the modal locked the page.
     document.documentElement.style.overflow = '';
     document.body && (document.body.style.overflow = '');
-    // Remove any leftover full-screen dimming overlay.
-    document
-      .querySelectorAll('[class*="overlay"]')
-      .forEach((o) => {
-        const r = o.getBoundingClientRect();
-        if (r.width >= window.innerWidth * 0.9 && r.height >= window.innerHeight * 0.9) {
-          o.style.pointerEvents = 'none';
-        }
-      });
+    // Disable only fixed full-screen dimming backdrops. Never touch scrollable
+    // containers (the score view), or wheel scrolling dies.
+    document.querySelectorAll('[class*="overlay"]').forEach((o) => {
+      const cs = getComputedStyle(o);
+      if (cs.position !== 'fixed' || /auto|scroll/.test(cs.overflowY)) return;
+      const r = o.getBoundingClientRect();
+      if (r.width >= window.innerWidth * 0.9 && r.height >= window.innerHeight * 0.9) {
+        o.style.pointerEvents = 'none';
+      }
+    });
   }
 
   // Watch for the popup appearing (it's injected by the React app after load).
-  const observer = new MutationObserver(() => dismiss());
+  let pending = false;
+  const observer = new MutationObserver(() => {
+    if (pending) return;
+    pending = true;
+    setTimeout(() => { pending = false; dismiss(); }, 100); // throttle
+  });
 
   function start() {
     observer.observe(document.documentElement, {
