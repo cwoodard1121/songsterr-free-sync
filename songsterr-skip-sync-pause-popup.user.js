@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Songsterr – Skip "Original Audio" Sync-Pause Popup
 // @namespace    https://github.com/songsterr-tweaks
-// @version      1.2.0
+// @version      1.3.0
 // @description  Auto-dismisses the "Upgrade to Plus for Original audio without sync pauses" popup on Songsterr by choosing the free "continue with sync pauses" option. No more nag.
 // @author       you
 // @match        https://www.songsterr.com/*
@@ -68,6 +68,7 @@
           if (nag.isConnected) (findDialogRoot(nag) || nag).remove();
           cleanup();
         }, 300);
+        setTimeout(cleanup, 1500); // the app may re-apply the blur after closing
         return true;
       }
     }
@@ -83,6 +84,17 @@
     // Re-enable scrolling if the modal locked the page.
     document.documentElement.style.overflow = '';
     document.body && (document.body.style.overflow = '');
+    // Clear any large leftover blur (page wrapper or backdrop) from the modal.
+    document.querySelectorAll('*').forEach((e) => {
+      const cs = getComputedStyle(e);
+      if (!/blur/.test(cs.filter + cs.backdropFilter)) return;
+      const r = e.getBoundingClientRect();
+      if (r.width >= window.innerWidth * 0.5 && r.height >= window.innerHeight * 0.5) {
+        e.style.setProperty('filter', 'none', 'important');
+        e.style.setProperty('backdrop-filter', 'none', 'important');
+        console.log(TAG, 'cleared blur on', e.tagName, e.className);
+      }
+    });
     // Disable only fixed full-screen dimming backdrops. Never touch scrollable
     // containers (the score view), or wheel scrolling dies.
     document.querySelectorAll('[class*="overlay"]').forEach((o) => {
