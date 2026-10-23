@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Songsterr – Skip "Original Audio" Sync-Pause Popup
 // @namespace    https://github.com/songsterr-tweaks
-// @version      1.4.0
+// @version      1.4.1
 // @description  Auto-dismisses the "Upgrade to Plus for Original audio without sync pauses" popup on Songsterr by choosing the free "continue with sync pauses" option. No more nag.
 // @author       you
 // @match        https://www.songsterr.com/*
@@ -36,6 +36,22 @@
     return null;
   }
 
+  // Temporary: log whatever is still blurring the page after the click.
+  function diagnose() {
+    const out = [];
+    document.querySelectorAll('*').forEach((e) => {
+      const cs = getComputedStyle(e);
+      if (/blur/.test(cs.filter + cs.backdropFilter)) {
+        const r = e.getBoundingClientRect();
+        out.push(`${e.tagName}.${e.className} filter=${cs.filter} backdrop=${cs.backdropFilter} ${Math.round(r.width)}x${Math.round(r.height)}`);
+      }
+    });
+    console.log(TAG, 'DIAG blurred:', out.length ? out.join(' | ') : 'none',
+      '| html.class=' + document.documentElement.className,
+      '| body.class=' + document.body.className,
+      '| dialogs=' + document.querySelectorAll('[role="dialog"], dialog').length);
+  }
+
   function dismiss() {
     const nag = findNag();
     if (!nag) return false;
@@ -47,6 +63,7 @@
       if (CONTINUE_TEXT.test(link.textContent || '')) {
         console.log(TAG, 'clicked "continue with sync pauses" – popup dismissed');
         link.click();
+        setTimeout(diagnose, 2000);
         return true;
       }
     }
