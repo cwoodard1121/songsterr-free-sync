@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Songsterr – Skip "Original Audio" Sync-Pause Popup
 // @namespace    https://github.com/songsterr-tweaks
-// @version      1.4.1
+// @version      1.5.0
 // @description  Auto-dismisses the "Upgrade to Plus for Original audio without sync pauses" popup on Songsterr by choosing the free "continue with sync pauses" option. No more nag.
 // @author       you
 // @match        https://www.songsterr.com/*
@@ -36,6 +36,22 @@
     return null;
   }
 
+  // Dispatch the same event sequence a real mouse click produces, since the app
+  // may listen for pointer/mouse events rather than only 'click'.
+  function realClick(el) {
+    const r = el.getBoundingClientRect();
+    const init = {
+      bubbles: true, cancelable: true, composed: true, view: window,
+      clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
+      button: 0, buttons: 1, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+    };
+    for (const t of ['pointerover', 'pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
+      const Ctor = t.startsWith('pointer') ? PointerEvent : MouseEvent;
+      el.dispatchEvent(new Ctor(t, init));
+    }
+    el.dispatchEvent(new MouseEvent('click', { ...init, buttons: 0 }));
+  }
+
   // Temporary: log whatever is still blurring the page after the click.
   function diagnose() {
     const out = [];
@@ -62,8 +78,17 @@
     for (const link of nag.querySelectorAll('a, button')) {
       if (CONTINUE_TEXT.test(link.textContent || '')) {
         console.log(TAG, 'clicked "continue with sync pauses" – popup dismissed');
-        link.click();
-        setTimeout(diagnose, 2000);
+        realClick(link);
+        // If the app ignored it, try once more, then dump the popup for debugging.
+        setTimeout(() => {
+          if (!nag.isConnected) return;
+          console.log(TAG, 'popup still open – retrying click');
+          realClick(link);
+          setTimeout(() => {
+            if (nag.isConnected) console.log(TAG, 'STILL OPEN html:', nag.outerHTML.slice(0, 2500));
+            diagnose();
+          }, 1000);
+        }, 800);
         return true;
       }
     }
