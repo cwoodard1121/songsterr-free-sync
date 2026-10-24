@@ -1,8 +1,10 @@
 # Songsterr Free Sync
 
-A [Tampermonkey](https://www.tampermonkey.net/) userscript that auto-dismisses the
-Songsterr **"Upgrade to Plus for Original audio without sync pauses"** popup by
-clicking the free *"continue with sync pauses"* option for you.
+A [Tampermonkey](https://www.tampermonkey.net/) userscript that stops the
+Songsterr **"Upgrade to Plus for Original audio without sync pauses"** popup from
+ever showing. It takes the free *"continue with sync pauses"* option the instant
+Songsterr tries to open the popup, before it's drawn. If that ever breaks, it
+falls back to clicking the popup away.
 
 ## Setup
 
@@ -15,9 +17,9 @@ clicking the free *"continue with sync pauses"* option for you.
 
 ## Test it
 
-Open a song on [songsterr.com](https://www.songsterr.com/) — the popup should vanish on its own.
+Open a song on [songsterr.com](https://www.songsterr.com/) and play it with original audio. The popup should never appear.
 
-To confirm it's running: press **F12** → **Console**, look for `[Songsterr-NoNag] script loaded`.
+To confirm it's running: press **F12** → **Console**, look for `[Songsterr-NoNag] store hook installed`, then `blocked sync-pause popup` each time it would have appeared.
 
 ---
 

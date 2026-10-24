@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Songsterr – Skip "Original Audio" Sync-Pause Popup
 // @namespace    https://github.com/songsterr-tweaks
-// @version      2.0.0
-// @description  Auto-dismisses the "Upgrade to Plus for Original audio without sync pauses" popup on Songsterr by choosing the free "continue with sync pauses" option, every time it appears, and keeps playback going.
+// @version      3.0.0
+// @description  Stops the "Upgrade to Plus for Original audio without sync pauses" popup on Songsterr from ever showing, by taking the free "continue with sync pauses" option the instant the app tries to open it.
 // @author       you
 // @match        https://www.songsterr.com/*
 // @match        https://songsterr.com/*
@@ -17,6 +17,74 @@
 
   const TAG = '[Songsterr-NoNag]';
   console.log(TAG, 'script loaded on', location.href);
+
+  // ---------------------------------------------------------------------------
+  // Primary: hook the app's store so the popup never renders.
+  //
+  // Every few bars of original audio the player dispatches
+  // `layer/show 'constraints_modal'`, and the popup renders while
+  // state.layer.layer === 'constraints_modal'. Its "continue with sync pauses"
+  // link just dispatches `layer/hide`, and closing it dispatches
+  // `controls/closeConstraintsModal`, which sets up the next sync window.
+  // We do those same two dispatches synchronously inside the `layer/show`
+  // handler, so the layer is already closed before Preact renders.
+  //
+  // This runs in the page's own JS world (injected <script>) because the store
+  // is only reachable through Preact's expandos on the #root element.
+  // ---------------------------------------------------------------------------
+  function pageHook(TAG) {
+    const MAX_WAIT_MS = 30000;
+    const started = Date.now();
+
+    // Preact keeps the rendered vnode tree on the container as `__k`; the app
+    // root component receives the store as `props.store`.
+    function findStore() {
+      const root = document.getElementById('root');
+      const stack = [root && root.__k];
+      let seen = 0;
+      while (stack.length && seen < 50000) {
+        const v = stack.pop();
+        if (!v) continue;
+        seen++;
+        if (Array.isArray(v)) { stack.push(...v); continue; }
+        const s = v.props && v.props.store;
+        if (s && typeof s.dispatch === 'function' && typeof s.after === 'function' && typeof s.get === 'function') return s;
+        if (v.__k) stack.push(v.__k);
+      }
+      return null;
+    }
+
+    function install(store) {
+      store.after('layer/show', (state) => {
+        if (state.layer?.layer !== 'constraints_modal') return;
+        store.dispatch('layer/hide');
+        store.dispatch('controls/closeConstraintsModal');
+        console.log(TAG, 'blocked sync-pause popup');
+      });
+      document.documentElement.dataset.nonagHooked = '1';
+      console.log(TAG, 'store hook installed');
+    }
+
+    (function poll() {
+      const store = findStore();
+      if (store) return install(store);
+      if (Date.now() - started > MAX_WAIT_MS) {
+        console.warn(TAG, 'store not found; falling back to clicking the popup away');
+        return;
+      }
+      setTimeout(poll, 200);
+    })();
+  }
+
+  const script = document.createElement('script');
+  script.textContent = `(${pageHook})(${JSON.stringify(TAG)});`;
+  (document.head || document.documentElement).appendChild(script);
+  script.remove();
+
+  // ---------------------------------------------------------------------------
+  // Fallback: if the hook ever fails (e.g. Songsterr changes its internals),
+  // click "continue with sync pauses" whenever the popup is visible.
+  // ---------------------------------------------------------------------------
 
   // Phrases that identify the upgrade nag. Matched against text, not on the
   // build-hashed class names (w_eHuW_*, _2e9mvq_*) which change every deploy.
@@ -85,6 +153,10 @@
       }
       wasPlaying = null;
       return;
+    }
+
+    if (document.documentElement.dataset.nonagHooked) {
+      console.warn(TAG, 'popup appeared despite store hook; clicking it away');
     }
 
     if (wasPlaying === null) wasPlaying = isPlaying();
