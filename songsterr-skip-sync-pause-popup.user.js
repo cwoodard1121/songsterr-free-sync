@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         Songsterr – Skip "Original Audio" Sync-Pause Popup
 // @namespace    https://github.com/songsterr-tweaks
-// @version      1.5.0
-// @description  Auto-dismisses the "Upgrade to Plus for Original audio without sync pauses" popup on Songsterr by choosing the free "continue with sync pauses" option. No more nag.
+// @version      2.0.0
+// @description  Auto-dismisses the "Upgrade to Plus for Original audio without sync pauses" popup on Songsterr by choosing the free "continue with sync pauses" option, every time it appears, and keeps playback going.
 // @author       you
 // @match        https://www.songsterr.com/*
 // @match        https://songsterr.com/*
+// @updateURL    https://raw.githubusercontent.com/cwoodard1121/songsterr-free-sync/main/songsterr-skip-sync-pause-popup.user.js
+// @downloadURL  https://raw.githubusercontent.com/cwoodard1121/songsterr-free-sync/main/songsterr-skip-sync-pause-popup.user.js
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
@@ -21,19 +23,39 @@
   const NAG_TEXT = /without sync pauses|upgrade to plus for original audio/i;
   const CONTINUE_TEXT = /continue with sync pauses/i;
 
-  // Elements we've already acted on. The observer fires on every DOM mutation
-  // (playback scrolling mutates constantly), so without this we'd re-click the
-  // button over and over and stall the score.
-  const handled = new WeakSet();
+  // The popup comes back every ~30s while original audio plays, sometimes as
+  // the same element. So rather than marking elements as done, we click
+  // whenever a nag is visible, at most once per RETRY_MS.
+  const RETRY_MS = 700;
+  let lastClick = 0;
+
+  // Whether playback was running when the nag showed up, so we can resume it
+  // if the popup (or dismissing it) paused the player.
+  let wasPlaying = null;
+
+  function isVisible(el) {
+    if (!el.isConnected) return false;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
 
   function findNag() {
-    const dialogs = document.querySelectorAll(
-      'form[role="dialog"], [role="dialog"], dialog'
-    );
+    const dialogs = document.querySelectorAll('form[role="dialog"], [role="dialog"], dialog');
     for (const el of dialogs) {
-      if (!handled.has(el) && NAG_TEXT.test(el.textContent || '')) return el;
+      if (NAG_TEXT.test(el.textContent || '') && isVisible(el)) return el;
     }
     return null;
+  }
+
+  // The play button's title reads "Pause ..." while playing, "Play ..." while paused.
+  function playButton() {
+    return document.getElementById('control-play');
+  }
+  function isPlaying() {
+    const btn = playButton();
+    return !!btn && /^pause/i.test(btn.title || btn.getAttribute('aria-label') || '');
   }
 
   // Dispatch the same event sequence a real mouse click produces, since the app
@@ -52,63 +74,49 @@
     el.dispatchEvent(new MouseEvent('click', { ...init, buttons: 0 }));
   }
 
-  // Temporary: log whatever is still blurring the page after the click.
-  function diagnose() {
-    const out = [];
-    document.querySelectorAll('*').forEach((e) => {
-      const cs = getComputedStyle(e);
-      if (/blur/.test(cs.filter + cs.backdropFilter)) {
-        const r = e.getBoundingClientRect();
-        out.push(`${e.tagName}.${e.className} filter=${cs.filter} backdrop=${cs.backdropFilter} ${Math.round(r.width)}x${Math.round(r.height)}`);
-      }
-    });
-    console.log(TAG, 'DIAG blurred:', out.length ? out.join(' | ') : 'none',
-      '| html.class=' + document.documentElement.className,
-      '| body.class=' + document.body.className,
-      '| dialogs=' + document.querySelectorAll('[role="dialog"], dialog').length);
-  }
-
-  function dismiss() {
+  function check() {
     const nag = findNag();
-    if (!nag) return false;
-    handled.add(nag);
 
-    // Just click the free "continue with sync pauses" link inside the nag and
-    // let the app close its own modal (removing it ourselves leaves the blur).
+    if (!nag) {
+      // Popup gone: if it interrupted playback, start it again.
+      if (wasPlaying && !isPlaying() && playButton()) {
+        console.log(TAG, 'resuming playback');
+        realClick(playButton());
+      }
+      wasPlaying = null;
+      return;
+    }
+
+    if (wasPlaying === null) wasPlaying = isPlaying();
+
+    const now = Date.now();
+    if (now - lastClick < RETRY_MS) return;
+
+    // Click the free "continue with sync pauses" link and let the app close
+    // its own modal (removing it ourselves leaves the page blurred).
     for (const link of nag.querySelectorAll('a, button')) {
       if (CONTINUE_TEXT.test(link.textContent || '')) {
-        console.log(TAG, 'clicked "continue with sync pauses" – popup dismissed');
+        lastClick = now;
+        console.log(TAG, 'clicked "continue with sync pauses"');
         realClick(link);
-        // If the app ignored it, try once more, then dump the popup for debugging.
-        setTimeout(() => {
-          if (!nag.isConnected) return;
-          console.log(TAG, 'popup still open – retrying click');
-          realClick(link);
-          setTimeout(() => {
-            if (nag.isConnected) console.log(TAG, 'STILL OPEN html:', nag.outerHTML.slice(0, 2500));
-            diagnose();
-          }, 1000);
-        }, 800);
-        return true;
+        return;
       }
     }
-    return false;
   }
 
-  // Watch for the popup appearing (it's injected by the React app after load).
+  // React injects the popup after load; react to DOM changes (throttled, since
+  // playback mutates the DOM constantly) and poll as a backstop.
   let pending = false;
   const observer = new MutationObserver(() => {
     if (pending) return;
     pending = true;
-    setTimeout(() => { pending = false; dismiss(); }, 100); // throttle
+    setTimeout(() => { pending = false; check(); }, 100);
   });
 
   function start() {
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-    });
-    dismiss(); // in case it's already there
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    setInterval(check, 500);
+    check();
   }
 
   if (document.body) {
